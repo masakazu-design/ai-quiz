@@ -4156,7 +4156,19 @@ function AIAdvisorQuizApp() {
       return { totalAnswered: 0, totalCorrect: 0, categoryStats: {} };
     }
   });
+  const [wrongQuestions, setWrongQuestions] = React.useState(() => {
+    try {
+      const saved = localStorage.getItem('aiQuizWrongQuestions');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
   const [weakMode, setWeakMode] = React.useState(false);
+  const [wrongMode, setWrongMode] = React.useState(false);
+  const [examMode, setExamMode] = React.useState(false);
+  const [examTimeLeft, setExamTimeLeft] = React.useState(0);
+  const [examStartTime, setExamStartTime] = React.useState(null);
 
   // 統計を保存
   React.useEffect(() => {
@@ -4164,6 +4176,29 @@ function AIAdvisorQuizApp() {
       localStorage.setItem('aiQuizStats', JSON.stringify(stats));
     } catch {}
   }, [stats]);
+
+  // 間違えた問題を保存
+  React.useEffect(() => {
+    try {
+      localStorage.setItem('aiQuizWrongQuestions', JSON.stringify(wrongQuestions));
+    } catch {}
+  }, [wrongQuestions]);
+
+  // 模擬試験タイマー
+  React.useEffect(() => {
+    if (!examMode || examTimeLeft <= 0) return;
+    const timer = setInterval(() => {
+      setExamTimeLeft(prev => {
+        if (prev <= 1) {
+          clearInterval(timer);
+          setCurrentView('result');
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [examMode, examTimeLeft > 0]);
 
   const getCategoryAccuracy = (category) => {
     const catStats = stats.categoryStats[category];
@@ -4194,8 +4229,28 @@ function AIAdvisorQuizApp() {
     return filtered;
   };
 
-  const startQuiz = (category, isWeakMode = false) => {
-    const shuffled = filterAndShuffleQuestions(category, isWeakMode);
+  const startQuiz = (category, isWeakMode = false, isWrongMode = false, isExamMode = false) => {
+    let shuffled;
+
+    if (isWrongMode) {
+      // 間違えた問題モード
+      shuffled = questionsData.filter(q => wrongQuestions.includes(q.id));
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
+    } else if (isExamMode) {
+      // 模擬試験モード（100問ランダム）
+      shuffled = [...questionsData];
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
+      shuffled = shuffled.slice(0, 100);
+    } else {
+      shuffled = filterAndShuffleQuestions(category, isWeakMode);
+    }
+
     if (shuffled.length === 0) {
       alert('該当する問題がありません');
       return;
@@ -4206,6 +4261,15 @@ function AIAdvisorQuizApp() {
     setShowExplanation(false);
     setResults([]);
     setWeakMode(isWeakMode);
+    setWrongMode(isWrongMode);
+    setExamMode(isExamMode);
+    if (isExamMode) {
+      setExamTimeLeft(90 * 60); // 90分
+      setExamStartTime(Date.now());
+    } else {
+      setExamTimeLeft(0);
+      setExamStartTime(null);
+    }
     setCurrentView('quiz');
   };
 
@@ -4228,6 +4292,12 @@ function AIAdvisorQuizApp() {
         }
       }
     }));
+    // 間違えた問題を記録（正解したら削除）
+    if (isCorrect) {
+      setWrongQuestions(prev => prev.filter(id => id !== currentQuestion.id));
+    } else {
+      setWrongQuestions(prev => prev.includes(currentQuestion.id) ? prev : [...prev, currentQuestion.id]);
+    }
   };
 
   const nextQuestion = () => {
@@ -4351,8 +4421,20 @@ function AIAdvisorQuizApp() {
           <button className="btn btn-blue" onClick={() => startQuiz(selectedCategory)}>学習開始</button>
         </div>
         {getWeakCategories().length > 0 && (
-          <button className="btn btn-orange" onClick={() => startQuiz('', true)}>🔥 苦手分野を克服する</button>
+          <button className="btn btn-orange" onClick={() => startQuiz('', true, false, false)}>🔥 苦手分野を克服する</button>
         )}
+        {wrongQuestions.length > 0 && (
+          <button className="btn" style={{backgroundColor:'#dc2626',color:'white'}} onClick={() => startQuiz('', false, true, false)}>
+            ❌ 間違えた問題を復習（{wrongQuestions.length}問）
+          </button>
+        )}
+        <div className="card">
+          <h2 className="font-bold text-gray-700 mb-3">📝 模擬試験</h2>
+          <p className="text-sm text-gray-500 mb-3">本番と同じ100問・90分で挑戦</p>
+          <button className="btn" style={{backgroundColor:'#7c3aed',color:'white'}} onClick={() => startQuiz('', false, false, true)}>
+            🎯 模擬試験を開始
+          </button>
+        </div>
         <div className="grid-2">
           <button className="btn btn-green" onClick={() => setCurrentView('stats')}>📊 学習記録</button>
           <button className="btn btn-gray" onClick={() => setShowSyncModal(true)}>📲 同期</button>
@@ -4360,6 +4442,7 @@ function AIAdvisorQuizApp() {
         <button className="btn" style={{backgroundColor:'#f3f4f6',color:'#6b7280'}} onClick={() => {
           if (confirm('学習記録をリセットしますか？')) {
             setStats({ totalAnswered: 0, totalCorrect: 0, categoryStats: {} });
+            setWrongQuestions([]);
           }
         }}>🔄 リセット</button>
       </div>
@@ -4376,11 +4459,25 @@ function AIAdvisorQuizApp() {
   );
 
   // クイズ画面
+  // タイマー表示用フォーマット
+  const formatTime = (seconds) => {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m}:${s.toString().padStart(2, '0')}`;
+  };
+
   const QuizView = () => {
     const currentQuestion = questions[currentQuestionIndex];
     const progress = ((currentQuestionIndex + 1) / questions.length) * 100;
     return (
       <div className="container container-quiz">
+        {examMode && (
+          <div style={{backgroundColor: examTimeLeft < 300 ? '#fee2e2' : '#eff6ff', padding: '0.75rem', borderRadius: '0.5rem', marginBottom: '1rem', textAlign: 'center'}}>
+            <span style={{fontSize: '1.25rem', fontWeight: 'bold', color: examTimeLeft < 300 ? '#dc2626' : '#1e40af'}}>
+              ⏱️ 残り時間: {formatTime(examTimeLeft)}
+            </span>
+          </div>
+        )}
         <div className="mb-4">
           <div className="flex justify-between items-center mb-2">
             <span className="text-sm font-medium text-gray-600">問題 {currentQuestionIndex + 1} / {questions.length}</span>
@@ -4441,13 +4538,20 @@ function AIAdvisorQuizApp() {
       return catMap;
     }, [results]);
 
+    const elapsedTime = examStartTime ? Math.floor((Date.now() - examStartTime) / 1000) : 0;
+
     return (
       <div className="container container-quiz">
         <div className={`result-box ${passed ? 'result-pass' : 'result-fail'}`}>
-          <h2 className="text-xl font-bold mb-2">{passed ? '🎉 合格ライン達成！' : '📚 もう少し頑張ろう！'}</h2>
+          <h2 className="text-xl font-bold mb-2">
+            {examMode ? (passed ? '🎉 模擬試験合格！' : '📚 模擬試験終了') : (passed ? '🎉 合格ライン達成！' : '📚 もう少し頑張ろう！')}
+          </h2>
           <p className="text-4xl font-bold mb-2">{correctCount} / {results.length}</p>
           <p className="text-2xl">正解率: {accuracy}%</p>
           <p className="text-sm text-gray-600 mt-2">合格基準: 70%以上</p>
+          {examMode && (
+            <p className="text-sm text-gray-600 mt-1">所要時間: {formatTime(elapsedTime)}</p>
+          )}
         </div>
         <div className="card">
           <h3 className="font-bold text-gray-700 mb-3">📊 分野別結果</h3>
