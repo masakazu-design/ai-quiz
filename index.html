@@ -4229,7 +4229,61 @@ function AIAdvisorQuizApp() {
     return filtered;
   };
 
-  const startQuiz = (category, isWeakMode = false, isWrongMode = false, isExamMode = false) => {
+  // 問題バリエーション生成（選択肢シャッフル＋問題文変換）
+  const generateVariation = (question) => {
+    const q = { ...question };
+
+    // 4択問題のみ対象
+    if (q.choices.length !== 4) return q;
+
+    // 問題文に「適切なもの」「適切ではないもの」が含まれるか確認
+    const hasPositive = q.question.includes('適切なもの') || q.question.includes('適切な記述');
+    const hasNegative = q.question.includes('適切ではないもの') || q.question.includes('適切でないもの') || q.question.includes('適切ではない記述');
+
+    // ランダムで変換するかどうか決定（50%の確率）
+    const shouldFlip = Math.random() > 0.5;
+
+    if (shouldFlip && (hasPositive || hasNegative)) {
+      // 問題文を反転
+      let newQuestion = q.question;
+      if (hasPositive && !hasNegative) {
+        newQuestion = newQuestion.replace(/適切なもの/g, '適切ではないもの').replace(/適切な記述/g, '適切ではない記述');
+      } else if (hasNegative) {
+        newQuestion = newQuestion.replace(/適切ではないもの/g, '適切なもの').replace(/適切でないもの/g, '適切なもの').replace(/適切ではない記述/g, '適切な記述');
+      }
+
+      // 正解以外の選択肢からランダムに新しい正解を選ぶ
+      const wrongIndices = [0, 1, 2, 3].filter(i => i !== q.correctIndex);
+      const newCorrectIndex = wrongIndices[Math.floor(Math.random() * wrongIndices.length)];
+
+      return {
+        ...q,
+        id: q.id + 10000, // IDを変えて別問題扱い
+        question: newQuestion,
+        correctIndex: newCorrectIndex,
+        explanation: q.explanation + '（※この問題は元の問題の変形版です）'
+      };
+    }
+
+    // 選択肢の順番をシャッフル
+    const indices = [0, 1, 2, 3];
+    for (let i = indices.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [indices[i], indices[j]] = [indices[j], indices[i]];
+    }
+
+    const newChoices = indices.map(i => q.choices[i]);
+    const newCorrectIndex = indices.indexOf(q.correctIndex);
+
+    return {
+      ...q,
+      id: q.id + 20000,
+      choices: newChoices,
+      correctIndex: newCorrectIndex
+    };
+  };
+
+  const startQuiz = (category, isWeakMode = false, isWrongMode = false, isExamMode = false, isVariationMode = false) => {
     let shuffled;
 
     if (isWrongMode) {
@@ -4247,6 +4301,14 @@ function AIAdvisorQuizApp() {
         [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
       }
       shuffled = shuffled.slice(0, 100);
+    } else if (isVariationMode) {
+      // バリエーションモード（問題を変形）
+      shuffled = [...questionsData].filter(q => q.choices.length === 4); // 4択のみ
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
+      shuffled = shuffled.slice(0, 50).map(q => generateVariation(q)); // 50問を変形
     } else {
       shuffled = filterAndShuffleQuestions(category, isWeakMode);
     }
@@ -4431,8 +4493,15 @@ function AIAdvisorQuizApp() {
         <div className="card">
           <h2 className="font-bold text-gray-700 mb-3">📝 模擬試験</h2>
           <p className="text-sm text-gray-500 mb-3">本番と同じ100問・90分で挑戦</p>
-          <button className="btn" style={{backgroundColor:'#7c3aed',color:'white'}} onClick={() => startQuiz('', false, false, true)}>
+          <button className="btn" style={{backgroundColor:'#7c3aed',color:'white'}} onClick={() => startQuiz('', false, false, true, false)}>
             🎯 模擬試験を開始
+          </button>
+        </div>
+        <div className="card">
+          <h2 className="font-bold text-gray-700 mb-3">🔀 変形問題チャレンジ</h2>
+          <p className="text-sm text-gray-500 mb-3">選択肢シャッフル＆問題文変換で実力試し（50問）</p>
+          <button className="btn" style={{backgroundColor:'#0891b2',color:'white'}} onClick={() => startQuiz('', false, false, false, true)}>
+            🎲 変形問題に挑戦
           </button>
         </div>
         <div className="grid-2">
