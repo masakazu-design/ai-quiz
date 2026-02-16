@@ -4164,11 +4164,30 @@ function AIAdvisorQuizApp() {
       return [];
     }
   });
+  // 問題ごとの最終回答履歴 { [questionId]: { correct: boolean, answeredAt: timestamp } }
+  const [answerHistory, setAnswerHistory] = React.useState(() => {
+    try {
+      const saved = localStorage.getItem('aiQuizAnswerHistory');
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
   const [weakMode, setWeakMode] = React.useState(false);
   const [wrongMode, setWrongMode] = React.useState(false);
   const [examMode, setExamMode] = React.useState(false);
   const [examTimeLeft, setExamTimeLeft] = React.useState(0);
   const [examStartTime, setExamStartTime] = React.useState(null);
+
+  // 途中経過を復元
+  const [savedProgress, setSavedProgress] = React.useState(() => {
+    try {
+      const saved = localStorage.getItem('aiQuizProgress');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
 
   // 統計を保存
   React.useEffect(() => {
@@ -4183,6 +4202,61 @@ function AIAdvisorQuizApp() {
       localStorage.setItem('aiQuizWrongQuestions', JSON.stringify(wrongQuestions));
     } catch {}
   }, [wrongQuestions]);
+
+  // 回答履歴を保存
+  React.useEffect(() => {
+    try {
+      localStorage.setItem('aiQuizAnswerHistory', JSON.stringify(answerHistory));
+    } catch {}
+  }, [answerHistory]);
+
+  // 途中経過を保存（クイズ中のみ）
+  React.useEffect(() => {
+    if (currentView === 'quiz' && questions.length > 0) {
+      try {
+        const progress = {
+          questions,
+          currentQuestionIndex,
+          results,
+          weakMode,
+          wrongMode,
+          examMode,
+          examTimeLeft,
+          examStartTime,
+          savedAt: Date.now()
+        };
+        localStorage.setItem('aiQuizProgress', JSON.stringify(progress));
+        setSavedProgress(progress);
+      } catch {}
+    }
+  }, [currentView, currentQuestionIndex, results]);
+
+  // 途中経過をクリア
+  const clearProgress = () => {
+    localStorage.removeItem('aiQuizProgress');
+    setSavedProgress(null);
+  };
+
+  // 途中から再開
+  const resumeQuiz = () => {
+    if (!savedProgress) return;
+    setQuestions(savedProgress.questions);
+    setCurrentQuestionIndex(savedProgress.currentQuestionIndex);
+    setResults(savedProgress.results);
+    setSelectedAnswer(null);
+    setShowExplanation(false);
+    setWeakMode(savedProgress.weakMode || false);
+    setWrongMode(savedProgress.wrongMode || false);
+    setExamMode(savedProgress.examMode || false);
+    if (savedProgress.examMode && savedProgress.examTimeLeft > 0) {
+      // 経過時間を計算して残り時間を調整
+      const elapsed = Math.floor((Date.now() - savedProgress.savedAt) / 1000);
+      const remaining = Math.max(0, savedProgress.examTimeLeft - elapsed);
+      setExamTimeLeft(remaining);
+      setExamStartTime(savedProgress.examStartTime);
+    }
+    setCurrentView('quiz');
+  };
 
   // 模擬試験タイマー
   React.useEffect(() => {
@@ -4360,6 +4434,11 @@ function AIAdvisorQuizApp() {
     } else {
       setWrongQuestions(prev => prev.includes(currentQuestion.id) ? prev : [...prev, currentQuestion.id]);
     }
+    // 回答履歴を更新
+    setAnswerHistory(prev => ({
+      ...prev,
+      [currentQuestion.id]: { correct: isCorrect, answeredAt: Date.now() }
+    }));
   };
 
   const nextQuestion = () => {
@@ -4388,9 +4467,17 @@ function AIAdvisorQuizApp() {
     } catch { return null; }
   };
 
+  // 同期用データ生成（stats + wrongQuestions + answerHistory）
+  const getSyncData = () => ({
+    stats,
+    wrongQuestions,
+    answerHistory
+  });
+
   // QRコード生成
   const generateQR = () => {
-    const encoded = encodeStats(stats);
+    const syncData = getSyncData();
+    const encoded = encodeStats(syncData);
     if (!encoded || stats.totalAnswered === 0) {
       setSyncMessage('学習履歴がありません');
       return;
@@ -4410,7 +4497,16 @@ function AIAdvisorQuizApp() {
   // データインポート
   const importStats = () => {
     const decoded = decodeStats(importCode.trim());
-    if (decoded && typeof decoded.totalAnswered === 'number') {
+    // 新形式（stats, wrongQuestions, answerHistory）をサポート
+    if (decoded && decoded.stats && typeof decoded.stats.totalAnswered === 'number') {
+      setStats(decoded.stats);
+      if (decoded.wrongQuestions) setWrongQuestions(decoded.wrongQuestions);
+      if (decoded.answerHistory) setAnswerHistory(decoded.answerHistory);
+      setSyncMessage('履歴をインポートしました！');
+      setImportCode('');
+      setTimeout(() => { setShowSyncModal(false); setSyncMessage(''); }, 1500);
+    } else if (decoded && typeof decoded.totalAnswered === 'number') {
+      // 旧形式（statsのみ）もサポート
       setStats(decoded);
       setSyncMessage('履歴をインポートしました！');
       setImportCode('');
@@ -4437,7 +4533,7 @@ function AIAdvisorQuizApp() {
                 className="select mt-2"
                 style={{fontSize:'0.7rem',height:'4rem'}}
                 readOnly
-                value={encodeStats(stats)}
+                value={encodeStats(getSyncData())}
                 onClick={(e) => e.target.select()}
               />
             </div>
@@ -4475,6 +4571,21 @@ function AIAdvisorQuizApp() {
         <p className="text-sm text-gray-500 mt-2">全{questionsData.length}問収録</p>
       </div>
       <div className="space-y-4">
+        {savedProgress && (
+          <div className="card" style={{backgroundColor: '#fef3c7', border: '2px solid #f59e0b'}}>
+            <h2 className="font-bold text-yellow-800 mb-2">⏸️ 途中のクイズがあります</h2>
+            <p className="text-sm text-gray-600 mb-3">
+              {savedProgress.examMode ? '模擬試験' : savedProgress.weakMode ? '苦手分野' : savedProgress.wrongMode ? '間違えた問題' : '学習'}
+              （{savedProgress.currentQuestionIndex + 1}/{savedProgress.questions.length}問目）
+            </p>
+            <div className="grid-2">
+              <button className="btn" style={{backgroundColor: '#f59e0b', color: 'white'}} onClick={resumeQuiz}>▶️ 再開する</button>
+              <button className="btn btn-gray" onClick={() => {
+                if (confirm('途中のクイズを破棄しますか？')) clearProgress();
+              }}>🗑️ 破棄する</button>
+            </div>
+          </div>
+        )}
         <div className="card">
           <h2 className="font-bold text-gray-700 mb-3">📚 分野を選んで学習</h2>
           <select className="select" value={selectedCategory} onChange={(e) => setSelectedCategory(e.target.value)}>
@@ -4512,6 +4623,7 @@ function AIAdvisorQuizApp() {
           if (confirm('学習記録をリセットしますか？')) {
             setStats({ totalAnswered: 0, totalCorrect: 0, categoryStats: {} });
             setWrongQuestions([]);
+            setAnswerHistory({});
           }
         }}>🔄 リセット</button>
       </div>
@@ -4555,6 +4667,14 @@ function AIAdvisorQuizApp() {
           <div className="progress-bar"><div className="progress-fill progress-blue" style={{ width: progress + '%' }}></div></div>
         </div>
         <div className="card">
+          {answerHistory[currentQuestion.id] && (
+            <div style={{marginBottom: '0.5rem', fontSize: '0.75rem'}}>
+              {answerHistory[currentQuestion.id].correct
+                ? <span style={{color: '#16a34a'}}>✅ 前回正解</span>
+                : <span style={{color: '#dc2626'}}>❌ 前回不正解</span>
+              }
+            </div>
+          )}
           <p className="text-gray-800 leading-relaxed whitespace-pre-wrap">{currentQuestion.question}</p>
         </div>
         <div>
@@ -4594,6 +4714,11 @@ function AIAdvisorQuizApp() {
 
   // 結果画面
   const ResultView = () => {
+    // 結果画面に遷移したら途中経過をクリア
+    React.useEffect(() => {
+      clearProgress();
+    }, []);
+
     const correctCount = results.filter(r => r.isCorrect).length;
     const accuracy = Math.round((correctCount / results.length) * 100);
     const passed = accuracy >= 70;
