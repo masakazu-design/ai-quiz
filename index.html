@@ -4210,8 +4210,8 @@ function AIAdvisorQuizApp() {
     } catch {}
   }, [answerHistory]);
 
-  // 途中経過を保存（クイズ中のみ）
-  React.useEffect(() => {
+  // 途中経過を保存する関数
+  const saveProgress = React.useCallback(() => {
     if (currentView === 'quiz' && questions.length > 0) {
       try {
         const progress = {
@@ -4229,7 +4229,31 @@ function AIAdvisorQuizApp() {
         setSavedProgress(progress);
       } catch {}
     }
-  }, [currentView, currentQuestionIndex, results]);
+  }, [currentView, questions, currentQuestionIndex, results, weakMode, wrongMode, examMode, examTimeLeft, examStartTime]);
+
+  // 途中経過を自動保存（問題を進めるたび）
+  React.useEffect(() => {
+    saveProgress();
+  }, [currentQuestionIndex, results, saveProgress]);
+
+  // ページを離れる前に保存
+  React.useEffect(() => {
+    const handleBeforeUnload = () => {
+      saveProgress();
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    window.addEventListener('pagehide', handleBeforeUnload);
+    // スマホでアプリを切り替えた時
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') {
+        saveProgress();
+      }
+    });
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('pagehide', handleBeforeUnload);
+    };
+  }, [saveProgress]);
 
   // 途中経過をクリア
   const clearProgress = () => {
